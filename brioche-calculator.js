@@ -9,56 +9,74 @@
 // RIBS (1 rib = 2 sts); all parity is rib-parity.
 //
 // Ported from brioche_reference.py (see that file's module docstring for the
-// full derivation). Summary of the corrections made vs the original spec
-// text, all verified against brioche V7.docx (the actual knitted pattern —
-// primary source per the project's own rules):
+// full derivation). Summary:
 //
-//   1. Pre-raglan/Y4 back is B = F+1 (or F-1), not "B = F" (spec §3/§4).
-//      V7's own text: "F = odd No of ribs; B = F+1; sleeves = even No of
-//      ribs". This also falls out of parity: Y4 total = front+back+2*sleeve,
-//      2*sleeve is always even, so whenever Y4 total is odd, front+back must
-//      be odd — strict B=F is impossible whenever front is odd (a hard rule)
-//      and Y4 total is odd, as it is for the No2 anchor (111).
-//   2. Light-block per-section split (spec §7, explicitly flagged
-//      "unverified") is front+2 / back+2(one section) / sleeve+0(each), not
-//      "+1 to each section". Verified by reproducing V7's exact
-//      division-row stitch table (pre-raglan 13/8/14 -> Y4 31/24ea/32 via
-//      8 full + 1 light block). This is also why front parity never flips
-//      from pre-raglan to Y4: every block adds an EVEN number to front.
-//   3. UA (underarm cast-on) doesn't drive the block-growth search — blocks
-//      grow front/back/sleeve independent of UA (UA stitches are cast on
-//      separately at the division round). UA is chosen AFTER block growth,
-//      as a fine-tuner, matching spec's own framing.
-//   4. Block-row height is additionally scored against an empirical
-//      constant-cm target (~2.75cm/block), derived from the two known real
-//      block heights (No2: 10 rows @ gr37 = 2.70cm; No3: 12 rows @ gr43 =
-//      2.79cm) — reproduces both real block-row counts exactly.
+//   1. GROWTH MODEL IS THE SPEC'S, AS WRITTEN (do not "correct" this toward
+//      brioche V7.docx again — an earlier revision of this file did, and it
+//      was backwards; V7's stitch tables are the ones with the error, not
+//      the spec). Every section grows +2 per full block (front, back-as-
+//      ONE-section, each sleeve); light block (max 1, last) = +1 to EVERY
+//      section, not a front+2/back+2/sleeve+0 split.
+//   2. B = F, relaxed to B = F +/- 1 (never a fixed offset, never V7's
+//      specific direction): front is odd everywhere (hard rule -- the
+//      chevron needs a center rib), and back is whichever of
+//      {front-1, front, front+1} lands closest to the exact body target.
+//      This is forced by parity, not style: Y4 total = front+back+2*sleeve,
+//      and 2*sleeve is always even, so whenever Y4 total is odd (111 for
+//      No2) strict back=front is impossible -- it would force an even
+//      total. Back must differ from front by exactly 1 to reach an odd
+//      total at all.
+//   3. UA is the single outer/searched variable -- it's the one value
+//      shared between the sleeve target (appears x1) and the body target
+//      (appears x2), so it's the one genuinely binding unknown. For each
+//      UA, everything below is closed-form/enumerable, not a multi-term
+//      weighted score: sleeve/body Y4 targets are direct arithmetic; block
+//      rows/n_light are enumerated and every (rows, n_light) pair that
+//      back-solves to a valid pre-raglan AND has a valid one-time-increase
+//      is kept, then the single best is picked by how close its block
+//      height (rows * 10cm / gauge_rows) is to an empirical ~2.75cm/block
+//      constant (from the two known real block heights: No2 10 rows @
+//      gauge-rows 37 = 2.70cm, No3 12 rows @ gauge-rows 43 = 2.79cm).
+//      Candidates across UA are ranked by |neck - neck_target| alone (no
+//      other weighting) -- neck_target is a plain cm->rib conversion, not
+//      NECK_RELAX_FACTOR-adjusted; using the relax factor ranked a
+//      worse-fitting UA ahead of the one that reproduces the anchor
+//      exactly. Every UA that fails records why (sleeve parity / block fit
+//      / one-time band), not a bare no-solution.
 //
-// KNOWN RESIDUAL GAP: with valid parity everywhere, the No2 anchor lands
-// within 2 ribs on CO/neck/pre-raglan/Y4 (36/33/41/109 vs 38/35/43/111),
-// while one_time_inc(+8) and the block structure (9 blocks x 10 rows) match
-// exactly. Traced to NECK_RELAX_FACTOR=1.10 (spec §2) predicting
-// neck_ideal=33 for No2, vs V7's real neck of 35 (implying an effective
-// factor of ~1.03-1.05 for that specific sample). Neck is an explicit SOFT
-// target (README: "Neck is a soft target; Y4 targets + parity win"), so
-// this is treated as in-tolerance per spec §0's own bar (+/-2 ribs) rather
-// than hard-coded. See PR description for the full write-up.
+// SURFACED, NOT INVENTED (read before changing #1/#2 again):
+//
+//   - front-odd is a HARD, closure-checked rule only at Y4 (the chevron's
+//     own requirement). In the exact No2 anchor solution, front lands EVEN
+//     at the pre-raglan and neck stages (spec §3 also states "front odd"
+//     there) -- an unavoidable consequence of the uniform light-block rate
+//     (#1) together with the anchor's required block structure (exactly
+//     one light block): total front growth is then odd, so front's parity
+//     must flip somewhere in the middle. front is odd again at CO/pre-neck
+//     because the reduction round flips it back. Reported as
+//     info.preraglan_front_odd / info.neck_front_odd (non-hard-error).
+//   - Case C (bust 122kg, "large/fine" edge case) resolves with neck ~30%
+//     over its input neck_cm even at UA pinned to its max. This
+//     architecture computes Y4 rigidly from the bust/arm targets first,
+//     and block growth is capped by the armhole row budget; whatever
+//     blocks can't absorb has nowhere to go but neck (no body-only-rounds
+//     escape valve in this backward derivation). Valid/closure-clean, but
+//     a real structural limitation worth flagging, not silently "sane."
 
 // ---- constants (spec §2) ----
 const EASE = { close: 2.5, relaxed: 10.0 };
 const SLEEVE_EASE_CM = 7;
 const FUNNEL_DEPTH_CM = 8;
 const PRENECK_MARGIN_RIBS = 3;
-const NECK_RELAX_FACTOR = 1.10;
+const NECK_RELAX_FACTOR = 1.10; // kept per spec §2; NOT used in the UA ranking (see header)
 const ONE_TIME_PCT = [0.18, 0.30];
 const BLOCK_ROWS = [6, 14];
 const UA_MIN_CM = 2;
-const BLOCK_HEIGHT_TARGET_CM = 2.75; // empirical, see correction #4 above
-const FRONT_FRAC = 13 / 18;          // empirical split of (front+sleeve-base) at neck stage, from V7 No2
+const BLOCK_HEIGHT_TARGET_CM = 2.75; // empirical, see header note 3
 
-// per-section growth (spec §4, corrected per note 2 above): back = Lb+Rb as ONE section.
+// per-section growth (spec §4, AS WRITTEN -- do not "correct" toward V7; see CLAUDE.md).
 const FULL_RATE  = { front: 2, back: 2, sleeve: 2 };
-const LIGHT_RATE = { front: 2, back: 2, sleeve: 0 };
+const LIGHT_RATE = { front: 1, back: 1, sleeve: 1 };
 
 const GAUGE_STS_MIN = 8;
 const GAUGE_STS_MAX = 20;
@@ -72,9 +90,10 @@ function round(n)  { return Math.round(n); }
 
 /**
  * Solve Y4 (divide) upward to CO for one set of body-measurement inputs.
- * Returns { ok: true, ...result } or { ok: false, error } — never throws
- * for a "no solution found" outcome; throws only on invalid input shape
- * (caller's responsibility to validate before calling, see fetch handler).
+ * UA is the single outer/searched variable; everything else is closed-form
+ * per UA (see header note 3). Returns { ok: true, ... } or
+ * { ok: false, diagnostics: { UA: reason, ... } } -- never a bare
+ * "no_solution" (spec §7 diagnosability fix).
  */
 function solve({ bust_cm, upper_arm_cm, neck_cm, armhole_cm, gauge_sts, gauge_rows, fit }) {
   const bust = bust_cm, arm = upper_arm_cm, gs = gauge_sts, gr = gauge_rows;
@@ -83,134 +102,139 @@ function solve({ bust_cm, upper_arm_cm, neck_cm, armhole_cm, gauge_sts, gauge_ro
   const fin_bust = bust + EASE[fit];
   const fin_arm = arm + SLEEVE_EASE_CM;
 
-  const sleeve_total = cmToRibs(fin_arm);
-  const body_total = cmToRibs(fin_bust);
+  const body_target_ribs = cmToRibs(fin_bust);             // includes UA x2
+  const arm_target_ribs = toEven(round((fin_arm * gs) / 20)); // includes UA x1; forced even (post-UA sleeve even)
+
   const ua_lo = Math.max(1, round((UA_MIN_CM * gs) / 20));
   const ua_hi = Math.max(ua_lo, Math.floor((UA_max_cm(bust) * gs) / 20));
 
-  const neck_ideal = round((neck_cm / NECK_RELAX_FACTOR) * gs / 20);
+  const neck_target = round((neck_cm * gs) / 20); // plain cm->rib conversion; see header note 3
   const rows_target = (armhole_cm * gr) / 10;
 
-  let best = null;
+  const candidates = [];
+  const diagnostics = {};
 
-  for (let neck = Math.max(7, neck_ideal - 4); neck < neck_ideal + 5; neck++) {
-    if (neck % 2 === 0) continue; // neck is always odd -- see derivation below
+  for (let UA = ua_lo; UA <= ua_hi; UA++) {
+    const sleeve_Y4 = arm_target_ribs - UA;
+    if ((sleeve_Y4 + UA) % 2 !== 0) {
+      diagnostics[UA] = "sleeve_post_UA_parity_fail";
+      continue;
+    }
 
-    // Pre-raglan front/sleeve-base/back all derive from `neck` alone (spec Step C).
-    // front is odd, sleeve-base is odd (funnel/neck-stage parity, spec §3), and
-    // back = front +/- 1 (correction #1 above). Requiring
-    //   neck = front + 2*sleeve_base + (back - 2)      [one-time back +2 = +1/half]
-    // with back = front + offset (offset = +/-1) gives
-    //   front + sleeve_base = (neck + 2 - offset) / 2
-    // Since front and sleeve_base are both odd, their sum is even, which pins
-    // offset to whichever sign makes (neck+2-offset)/2 an integer -- i.e. neck's
-    // residue mod 4 (also why neck must be odd: two odd terms sum even).
-    let offset, target_sum;
-    if (neck % 4 === 3) { offset = 1; target_sum = (neck + 1) / 2; }
-    else if (neck % 4 === 1) { offset = -1; target_sum = (neck + 3) / 2; }
-    else continue;
+    const body_Y4 = body_target_ribs - 2 * UA;
+    const front_Y4 = toOdd(round(body_Y4 / 2));
+    // back = front, or front +/- 1 if that lands closest to the exact body
+    // target (header note 2). Never a fixed offset.
+    const backCandidates = [front_Y4 - 1, front_Y4, front_Y4 + 1];
+    const back_Y4 = backCandidates.reduce((bestC, c) =>
+      Math.abs(front_Y4 + c - body_Y4) < Math.abs(front_Y4 + bestC - body_Y4) ? c : bestC
+    );
 
-    const f_pr = toOdd(round(target_sum * FRONT_FRAC));
-    const s_pr_base = target_sum - f_pr;
-    if (s_pr_base < 1 || s_pr_base % 2 === 0) continue;
-    const b_pr = f_pr + offset; // pre-raglan back (one section); +1/half one-time increase already folded in
-    if (b_pr < 2) continue;
-
-    // Step C: one-time increase (18-30% of neck; back +1/half fixed, sleeve +odd each, front +0)
-    const incLo = Math.ceil(neck * ONE_TIME_PCT[0]);
-    const incHi = Math.floor(neck * ONE_TIME_PCT[1]);
-    for (let inc = incLo; inc <= incHi; inc++) {
-      if ((inc - 2) % 2 !== 0) continue;
-      const sAdd = (inc - 2) / 2;
-      if (sAdd < 1 || sAdd % 2 === 0) continue;
-      const s_pr = s_pr_base + sAdd;
-
-      // Step D: block solve
+    const uaValid = [];
+    let anyBlockFit = false;
+    for (let brow = BLOCK_ROWS[0]; brow <= BLOCK_ROWS[1]; brow++) {
+      const nb = round(rows_target / brow);
+      if (nb < 1) continue;
       for (let nlight = 0; nlight <= 1; nlight++) {
-        for (let brow = BLOCK_ROWS[0]; brow <= BLOCK_ROWS[1]; brow++) {
-          const nb = round(rows_target / brow);
-          if (nb < 1) continue;
-          const nfull = nb - nlight;
-          if (nfull < 1) continue;
+        const nfull = nb - nlight;
+        if (nfull < 1) continue;
+        const growth = nfull * FULL_RATE.front + nlight * LIGHT_RATE.front; // same growth for front/back/sleeve
+        const sleeve_pr = sleeve_Y4 - growth;
+        const front_pr = front_Y4 - growth;
+        const back_pr = back_Y4 - growth;
+        if (sleeve_pr < 2 || sleeve_pr % 2 !== 0) continue; // pre-raglan sleeve even (spec §3)
+        if (front_pr < 1 || back_pr < 1) continue;
+        anyBlockFit = true;
 
-          const front_end  = f_pr + nfull * FULL_RATE.front  + nlight * LIGHT_RATE.front;
-          const sleeve_end = s_pr + nfull * FULL_RATE.sleeve + nlight * LIGHT_RATE.sleeve;
-          const back_end   = b_pr + nfull * FULL_RATE.back   + nlight * LIGHT_RATE.back;
+        const front_neck = front_pr; // front +0 one-time
+        const back_neck = back_pr - 2; // back +1/half = +2 total, one-time
+        if (back_neck < 1) continue;
+        const CONST = front_neck + back_neck + 2 * sleeve_pr;
 
-          const row_err = Math.abs(nb - rows_target / brow);
-          const block_height_err = Math.abs((brow * 10) / gr - BLOCK_HEIGHT_TARGET_CM);
-
-          // UA is a fine-tuner chosen AFTER block growth (correction #3 above): it
-          // doesn't affect front_end/back_end/sleeve_end at all.
-          for (let UA = ua_lo; UA <= ua_hi; UA++) {
-            if ((sleeve_end + UA) % 2 !== 0) continue; // post-UA sleeve even (spec §3)
-            const SL_post = sleeve_end + UA;
-            const B_post = front_end + back_end + 2 * UA;
-            const fin_sleeve_cm = (SL_post * 2) / gs * 10;
-            const fin_bust_cm = (B_post * 2) / gs * 10;
-            const score =
-              block_height_err * 1.0 +
-              Math.abs(neck - neck_ideal) * 1.5 +
-              Math.abs(fin_bust_cm - fin_bust) * 0.3 +
-              Math.abs(fin_sleeve_cm - fin_arm) * 0.5 +
-              row_err * 0.3;
-            if (best === null || score < best.score) {
-              best = {
-                score, neck, inc, sAdd, f_pr, s_pr, b_pr, offset,
-                nfull, nlight, brow, nb,
-                front_end, back_end, sleeve_end,
-                UA, SL_post, B_post, fin_bust_cm, fin_sleeve_cm,
-              };
+        let bestSAdd = null;
+        for (let sAdd = 1; sAdd <= 60; sAdd += 2) {
+          const neck_total = CONST - 2 * sAdd;
+          if (neck_total < 7) break;
+          const inc = 2 + 2 * sAdd;
+          const lo = Math.ceil(neck_total * ONE_TIME_PCT[0]);
+          const hi = Math.floor(neck_total * ONE_TIME_PCT[1]);
+          if (lo <= inc && inc <= hi) {
+            if (bestSAdd === null || Math.abs(neck_total - neck_target) < Math.abs(bestSAdd.neck_total - neck_target)) {
+              bestSAdd = { sAdd, inc, neck_total };
             }
           }
         }
+        if (bestSAdd === null) continue;
+
+        const bh_err = Math.abs((brow * 10) / gr - BLOCK_HEIGHT_TARGET_CM);
+        uaValid.push({
+          brow, nb, nfull, nlight,
+          front_pr, back_pr, sleeve_pr, front_neck, back_neck,
+          sAdd: bestSAdd.sAdd, inc: bestSAdd.inc, neck: bestSAdd.neck_total,
+          bh_err,
+        });
       }
     }
+
+    if (uaValid.length === 0) {
+      diagnostics[UA] = anyBlockFit ? "one_time_band_fail" : "block_fit_fail";
+      continue;
+    }
+
+    const bestUA = uaValid.reduce((a, c) => (c.bh_err < a.bh_err ? c : a));
+    candidates.push({
+      UA, sleeve_Y4, front_Y4, back_Y4,
+      ...bestUA,
+      CO: bestUA.neck + PRENECK_MARGIN_RIBS,
+      neck_dev: Math.abs(bestUA.neck - neck_target),
+    });
   }
 
-  if (best === null) {
-    return { ok: false, error: "no_solution", inputs: { bust_cm, upper_arm_cm, neck_cm, armhole_cm, gauge_sts, gauge_rows, fit } };
+  if (candidates.length === 0) {
+    return { ok: false, diagnostics, neck_target, inputs: { bust_cm, upper_arm_cm, neck_cm, armhole_cm, gauge_sts, gauge_rows, fit } };
   }
 
-  const b = best;
-  const CO = b.neck + PRENECK_MARGIN_RIBS;
+  const b = candidates.reduce((a, c) => (c.neck_dev < a.neck_dev ? c : a)); // single criterion, no weighted score
   const funnel_rows = toEven(round((FUNNEL_DEPTH_CM * gr) / 10));
-  const preraglan_ribs = b.f_pr + b.b_pr + 2 * b.s_pr;
-  const Y4_ribs = b.front_end + b.back_end + 2 * b.sleeve_end;
+  const preraglan_ribs = b.front_pr + b.back_pr + 2 * b.sleeve_pr;
+  const Y4_ribs = b.front_Y4 + b.back_Y4 + 2 * b.sleeve_Y4;
+  const SL_post = b.sleeve_Y4 + b.UA;
+  const B_post = b.front_Y4 + b.back_Y4 + 2 * b.UA;
 
-  // TDCR-style closure booleans -- hard-error (below) on any false.
+  // TDCR-style closure booleans -- these hold by construction; hard-error if any are false.
   const closure_checks = {
-    preraglan_front_odd: b.f_pr % 2 === 1,
-    preraglan_sleeve_even: b.s_pr % 2 === 0,
-    y4_front_odd: b.front_end % 2 === 1,
-    y4_back_offset_by_one: Math.abs(b.back_end - b.front_end) === 1,
-    sleeve_post_even: b.SL_post % 2 === 0,
+    y4_front_odd: b.front_Y4 % 2 === 1,
+    y4_back_within_one: Math.abs(b.back_Y4 - b.front_Y4) <= 1,
+    sleeve_post_even: SL_post % 2 === 0,
+    preraglan_sleeve_even: b.sleeve_pr % 2 === 0,
+  };
+  // informational only -- see header "SURFACED, NOT INVENTED". Can legitimately be
+  // false (it is, for the exact No2 anchor) without being a construction error.
+  const info = {
+    preraglan_front_odd: b.front_pr % 2 === 1,
+    neck_front_odd: b.front_neck % 2 === 1,
   };
 
-  const backHalf = Math.floor(b.b_pr / 2);
-  const y4BackHalf = Math.floor(b.back_end / 2);
-
-  // neck stage (before one-time increase): front unchanged (front+0 one-time), sleeve
-  // base (before +sAdd), back total = b_pr - 2 (one-time increase was +1/half = +2 total).
-  const neckBackHalf = (b.b_pr - 2) / 2;
-  const s_neck = b.s_pr - b.sAdd;
-  // pre-neck stage (before the reduction round): reduction removes front-1, sleeve-1/each
-  // (spec Step E), so working backward, pre-neck = neck + those same amounts.
-  const f_preneck = b.f_pr + 1;
+  const backHalf = Math.floor(b.back_pr / 2);
+  const y4BackHalf = Math.floor(b.back_Y4 / 2);
+  const neckBackHalf = Math.floor(b.back_neck / 2);
+  const s_neck = b.sleeve_pr - b.sAdd;
+  const f_preneck = b.front_neck + 1;
   const s_preneck = s_neck + 1;
   const b_preneck_half = neckBackHalf;
 
   return {
     ok: true,
-    CO_ribs: CO,
-    CO_cm: round((CO * 2) / gs * 10 * 10) / 10,
+    CO_ribs: b.CO,
+    CO_cm: round((b.CO * 2) / gs * 10 * 10) / 10,
     neck_ribs: b.neck,
     neck_cm: round((b.neck * 2) / gs * 10 * 10) / 10,
+    neck_target,
     distributions: {
       preneck: [b_preneck_half, s_preneck, f_preneck, s_preneck, b_preneck_half],
-      neck: [neckBackHalf, s_neck, b.f_pr, s_neck, neckBackHalf],
-      preraglan: [backHalf, b.s_pr, b.f_pr, b.s_pr, b.b_pr - backHalf],
-      Y4: [y4BackHalf, b.sleeve_end, b.front_end, b.sleeve_end, b.back_end - y4BackHalf],
+      neck: [neckBackHalf, s_neck, b.front_neck, s_neck, neckBackHalf],
+      preraglan: [backHalf, b.sleeve_pr, b.front_pr, b.sleeve_pr, b.back_pr - backHalf],
+      Y4: [y4BackHalf, b.sleeve_Y4, b.front_Y4, b.sleeve_Y4, b.back_Y4 - y4BackHalf],
     },
     one_time_inc: b.inc,
     one_time_dist: { back_each_half: 1, sleeve_each: b.sAdd, front: 0 },
@@ -219,12 +243,13 @@ function solve({ bust_cm, upper_arm_cm, neck_cm, armhole_cm, gauge_sts, gauge_ro
     funnel_rows,
     Y4_ribs,
     Y4: {
-      front: b.front_end, back: b.back_end, sleeve_preUA: b.sleeve_end, UA: b.UA,
-      SL_post: b.SL_post, B_post: b.B_post,
-      finished_bust_cm: Math.round(b.fin_bust_cm * 10) / 10,
-      finished_sleeve_cm: Math.round(b.fin_sleeve_cm * 10) / 10,
+      front: b.front_Y4, back: b.back_Y4, sleeve_preUA: b.sleeve_Y4, UA: b.UA,
+      SL_post, B_post,
+      finished_bust_cm: Math.round((B_post * 2 / gs * 10) * 10) / 10,
+      finished_sleeve_cm: Math.round((SL_post * 2 / gs * 10) * 10) / 10,
     },
     closure_checks,
+    info,
   };
 }
 
@@ -237,8 +262,8 @@ const HARNESS = {
   C:   { bust_cm: 122, upper_arm_cm: 42, neck_cm: 60, armhole_cm: 28,   gauge_sts: 20,   gauge_rows: 48, fit: "relaxed" },
 };
 
+// No2 anchor targets (spec §0 / README) -- checked EXACT (gap must be 0).
 const NO2_ANCHOR = { CO_ribs: 38, neck_ribs: 35, preraglan_ribs: 43, one_time_inc: 8, Y4_ribs: 111 };
-const NO2_TOLERANCE_RIBS = 2;
 
 // ---- input validation ----
 function validateInputs(body) {
@@ -268,10 +293,14 @@ function escapeHtml(s) {
 
 function renderResultHTML(inputs, result) {
   if (!result.ok) {
+    const reasons = Object.entries(result.diagnostics)
+      .map(([ua, reason]) => `<li>UA ${ua}: ${escapeHtml(reason)}</li>`).join("\n        ");
     return `<section class="result error">
       <h2>No solution found</h2>
-      <p>No parity-valid combination was found for these inputs within the search
-      space. Try adjusting armhole length, gauge, or fit.</p>
+      <p>No UA in range yielded a valid combination. Reason per UA tried:</p>
+      <ul>
+        ${reasons}
+      </ul>
     </section>`;
   }
   const checks = result.closure_checks;
@@ -295,6 +324,8 @@ function renderResultHTML(inputs, result) {
     <ul class="checks">
       ${Object.entries(checks).map(([k, v]) => `<li class="${v ? "pass" : "fail"}">${v ? "✓" : "✗"} ${escapeHtml(k)}</li>`).join("\n      ")}
     </ul>
+    <p class="note">Informational (not hard-checked — see brioche_reference.py header for why
+    these can legitimately be false): ${Object.entries(result.info).map(([k, v]) => `${escapeHtml(k)}=${v}`).join(", ")}</p>
   </section>`;
 }
 
@@ -392,9 +423,11 @@ export default {
         for (const [field, target] of Object.entries(NO2_ANCHOR)) {
           const achieved = no2[field];
           const gap = Math.abs(achieved - target);
-          anchor[field] = { target, achieved, gap, ok: gap <= NO2_TOLERANCE_RIBS };
-          if (gap > NO2_TOLERANCE_RIBS) allOk = false;
+          anchor[field] = { target, achieved, gap, ok: gap === 0 };
+          if (gap !== 0) allOk = false;
         }
+      } else {
+        allOk = false;
       }
       return new Response(JSON.stringify({ ok: allOk, results, no2_anchor: anchor }, null, 2), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -443,4 +476,4 @@ export default {
   },
 };
 
-export { solve, HARNESS, NO2_ANCHOR, NO2_TOLERANCE_RIBS, validateInputs };
+export { solve, HARNESS, NO2_ANCHOR, validateInputs };

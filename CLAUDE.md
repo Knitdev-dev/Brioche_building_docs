@@ -26,6 +26,11 @@ same architecture (calculator owns all calculation + rendering).
 - **Neck is a soft target**; Y4 targets + parity win.
 - **Post-UA sleeve must be even.**
 - **Never invent knitting rules for spec §7 (OPEN) items — surface them.**
+- **V7.docx stitch tables contain a B=F+1 / light-block error; the spec's
+  B=F (relaxed to B=F±1 only where parity strictly requires it — front is
+  always odd, back is never a fixed offset) and uniform +1 light-block
+  growth are authoritative. Do not "correct" toward V7 on these two
+  points.**
 
 ## Source of truth
 

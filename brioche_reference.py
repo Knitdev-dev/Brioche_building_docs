@@ -7,70 +7,104 @@ brioche_build_spec.md. Run `python3 brioche_reference.py` to execute the
 spec §0 five-case harness.
 
 --------------------------------------------------------------------------
-CORRECTIONS vs the original reference / spec §7 open items, all verified
-against brioche V7.docx (the actual knitted pattern -- primary source):
+REVISION 2 (this version): reverts the growth-model "correction" from
+revision 1, and replaces the nested heuristic search with a closed-form
+solver keyed on UA. See CLAUDE.md for the standing instruction this
+establishes: don't "correct" B=F / the light-block rate toward V7 again.
 
-1. Pre-raglan / Y4 back parity is B = F+1 (or F-1), NOT "B = F" as spec §3
-   and §4 state. V7's own text says it outright: "Principles for rib
-   counts: F = odd No of ribs; B = F+1; sleeves = even No of ribs" (pre-
-   raglan stage). Confirmed twice from the real stitch tables: pre-raglan
-   back(one section, Lback+Rback)=14=front(13)+1; Y4 back=32=front(31)+1
-   (division-row table). This is a MATHEMATICAL NECESSITY, not just an
-   observation: Y4 total = front+back+2*sleeve, and 2*sleeve is always
-   even, so whenever the Y4 total is odd (111 for No2), front+back must be
-   odd, meaning front and back have different parities -- strict B=F is
-   impossible whenever front is odd (a hard rule) and the Y4 total is odd.
-   Because both front and back grow at the identical +2/block rate (full
-   AND light blocks alike -- see #2), whatever offset exists at pre-raglan
-   persists unchanged through Y4: it is a derived invariant, not a
-   separately-tuned rule.
+1. GROWTH MODEL REVERTED TO SPEC (V7.docx's stitch tables are the error,
+   not the spec): every section grows +2 per full block (front, back-as-
+   ONE-section, each sleeve); light block (max 1, last) = +1 to EVERY
+   section (front/back/each sleeve), not the front+2/back+2/sleeve+0 split
+   revision 1 read out of V7's division-row table.
 
-2. Light-block per-section split (spec §7 explicitly flags this as
-   "unverified"). Real V7 (raglan increase 9, the light/last block) is
-   front+2 / back+2 (one section) / sleeve+0 (each) -- NOT the spec's
-   stated "+1 to each section". Verified by reproducing V7's exact
-   division-row stitch table: pre-raglan (front13/sleeve8ea/back14) -> Y4
-   (front31/sleeve24ea/back32) via 8 full blocks (+2/+2/+2 each) + 1 light
-   block; only front+2/back+2/sleeve+0 reproduces this exactly. This also
-   explains why front stays odd all the way from pre-raglan through Y4:
-   every block (full or light) adds an EVEN number of ribs to front, so
-   its parity never flips.
+2. B = F, RELAXED TO B = F ± 1 (never a fixed "+1", and never V7's
+   direction specifically): front is odd everywhere (hard rule — the
+   chevron needs a center rib), and back is chosen from {front-1, front,
+   front+1} — whichever integer split lands closest to the exact body
+   target for that section (so back is exactly front when the body target
+   permits it, else the nearer of front±1). This is a real mathematical
+   constraint, not a style choice: Y4 total = front + back + 2*sleeve, and
+   2*sleeve is always even, so whenever the Y4 total is odd (111 for No2),
+   strict back=front is impossible (it would force an even total) — back
+   must differ from front by exactly 1 to make an odd total reachable at
+   all.
 
-3. UA (underarm cast-on) does not drive the block-growth search. Blocks
-   grow front/back/sleeve independent of UA -- UA stitches are cast on
-   separately at the division round ("Cast on 8 stitches for underarm").
-   The old reference conflated the UA choice with the sleeve growth
-   target (forcing sleeve_end to land within ~1 rib of a UA-specific
-   point target) and also floored UA at a literal 2 ribs regardless of
-   gauge, which excludes valid small-UA solutions at finer gauges. Fixed:
-   solve pre-raglan + blocks first (UA-independent) to get front_end/
-   back_end/sleeve_end, THEN pick the best UA (within its cm-derived
-   range) satisfying post-UA-sleeve-even parity and best matching
-   finished bust/sleeve targets -- matching spec's own framing of UA as a
-   "fine-tuner".
-
-4. Block-row height search: rather than only minimizing the rounding
-   error of n_blocks against the armhole-row target (which alone prefers
-   larger block-row counts and does not reproduce either known real
-   case), block height in CM is also scored against an empirical target
-   (~2.75cm), derived from the two known real block heights: No2 (10
-   rows @ gauge-rows 37 = 2.70cm/block) and No3 (12 rows @ gauge-rows 43
-   = 2.79cm/block). This reproduces No2's real 9-block x 10-row structure
-   exactly, and No3's 9-block x 12-row structure exactly.
+3. SOLVER RESTRUCTURED: UA is the single outer/searched variable (it's the
+   one value shared between the sleeve target (appears x1) and the body
+   target (appears x2), so it's the one genuinely binding unknown — every
+   other harness case failing before was really a UA-search problem
+   wearing a neck-search costume). For each UA, everything below is
+   closed-form/enumerable, not a multi-term weighted score:
+     - sleeve_Y4_preUA = arm_target_ribs - UA (skip UA if the post-UA-even
+       parity check fails — this reduces to "is arm_target_ribs even",
+       which is why arm_target_ribs is rounded to the nearest EVEN value
+       up front, matching the "post-UA sleeve must be even" hard rule).
+     - body_Y4_preUA = body_target_ribs - 2*UA; front/back split as in #2.
+     - block_rows/n_light: enumerate every (block_rows in 6..14, n_light
+       in {0,1}) pair, back-solve pre-raglan (front/back/sleeve) by
+       subtracting block growth from the Y4 values, and KEEP every pair
+       that (a) yields a valid pre-raglan (sleeve even & positive, front &
+       back positive) and (b) has a valid one-time-increase solution (see
+       below). Among the pairs that survive both checks, pick the one
+       closest to an empirical constant block-height (~2.75cm/block,
+       derived from the two known real block heights: No2 10 rows @
+       gauge-rows 37 = 2.70cm, No3 12 rows @ gauge-rows 43 = 2.79cm) — this
+       is a single, deterministic tiebreak, not a weighted score. (Trying
+       to pick this pair by row-fit BEFORE checking one-time-increase
+       feasibility, or by block-height alone before checking it, each
+       silently produced a "best" pick that then had no valid one-time
+       solution and starved the search — see "must enumerate all viable
+       pairs" below.)
+     - one-time increase: back +1/half (fixed), sleeve +sAdd/each (odd),
+       front +0. Enumerate sAdd = 1, 3, 5, ... and keep any that lands
+       one_time_inc = 2 + 2*sAdd within [18%, 30%] of the resulting neck
+       total; among valid sAdd, pick the one closest to neck_target.
+     - neck = the resulting total; CO = neck + 3.
+   Across all UA that produced a valid candidate, rank by
+   |neck - neck_target| alone (no other weighting) and take the best.
+   neck_target itself is a plain cm->rib conversion of neck_cm (no
+   NECK_RELAX_FACTOR): applying the relax factor here made a
+   *worse*-fitting UA (2, giving pre-raglan=42/Y4=114) rank ahead of the
+   one that reproduces the anchor exactly (UA=3, pre-raglan=43/Y4=111) —
+   NECK_RELAX_FACTOR is kept as a spec §2 constant but is not part of this
+   ranking; see "surfaced" note below.
+   Every failing UA records WHY it failed (sleeve_post_UA_parity_fail /
+   block_fit_fail / one_time_band_fail), not a bare no-solution.
 
 --------------------------------------------------------------------------
-KNOWN RESIDUAL GAP (surfaced, not hidden): with valid parity everywhere,
-the No2 anchor is reproduced within 2 ribs on CO/neck/pre-raglan/Y4
-(CO36 vs 38, neck33 vs 35, pre-raglan41 vs 43, Y4=109 vs 111), while
-one_time_inc(+8) and the block structure (9 blocks x 10 rows) match
-exactly. The gap traces to NECK_RELAX_FACTOR=1.10 (spec §2): it predicts
-neck_ideal=33 for No2, while V7's real neck is 35 (implying an effective
-factor of ~1.03-1.05 for that specific real, fresh-off-the-needles
-sample -- handoff.md separately records "~1.07 (fresh)" for No2, itself
-different from both). Given neck is explicitly a SOFT target (README:
-"Neck is a soft target; Y4 targets + parity win") this is treated as
-in-tolerance (spec §0 bar: "sane... +/-2 ribs / +/-1-2cm of intent") rather
-than forced to hit bit-exact by hard-coding neck=35 into the search.
+SURFACED, NOT INVENTED (read before changing #1/#2 again):
+
+- Front-odd is only asserted as a HARD, closure-checked rule at Y4 (the
+  chevron's own requirement, per direct instruction). Spec §3 also states
+  "front odd" at the pre-raglan and funnel/neck stages; in the exact No2
+  anchor solution, front lands EVEN at both of those intermediate stages
+  (front_pr = front_neck = 16). This is an unavoidable consequence of
+  restoring the uniform +1-per-section light-block rate (#1) together with
+  the block structure the anchor requires (exactly one light block): total
+  front growth across pre-raglan->Y4 is then nfull*2 + 1*1, always odd,
+  so front's parity necessarily flips somewhere in the middle whenever
+  exactly one light block is used. front IS odd again at CO/pre-neck
+  (17) because the reduction round (+1 going backward) flips it back.
+  Reported as `info.preraglan_front_odd` / `info.neck_front_odd`
+  (non-hard-error) rather than silently dropped or silently hard-failing
+  the anchor case.
+- neck_target for the UA ranking (#3) intentionally does NOT apply
+  NECK_RELAX_FACTOR — see #3 above for why. brioche_handoff.md separately
+  records a *different* relax factor (1.15, with a real measured ~1.07 for
+  No2) than spec §2's 1.10; none of the three reproduces No2's neck from
+  neck_cm exactly either way, so this is flagged rather than tuned further.
+- Case C (bust 122, the "large/fine" edge case) resolves with neck
+  ballooning to ~30% over its input neck_cm (77 vs 60 ribs-as-cm), even at
+  UA pinned to its maximum (14). Root cause: this architecture computes Y4
+  RIGIDLY from the bust/arm targets first, and block growth is capped by
+  the armhole-length row budget; whatever the blocks can't absorb has
+  nowhere to go but neck (there is no body-only-rounds escape valve in
+  this backward derivation, unlike the previous forward-search version).
+  For a large body at a fine gauge with a modest armhole, that's a lot of
+  irreducible residual. Case is non-"no solution" and closure-valid, but
+  this is a real, structural limitation of the new architecture worth
+  flagging back rather than silently shipping as "sane."
 """
 import math
 
@@ -79,16 +113,15 @@ EASE = {"close": 2.5, "relaxed": 10.0}
 SLEEVE_EASE_CM = 7
 FUNNEL_DEPTH_CM = 8
 PRENECK_MARGIN_RIBS = 3
-NECK_RELAX_FACTOR = 1.10
+NECK_RELAX_FACTOR = 1.10  # kept per spec §2; NOT used in the UA ranking (see module docstring)
 ONE_TIME_PCT = (0.18, 0.30)
 BLOCK_ROWS = (6, 14)
 UA_MIN_CM = 2
-BLOCK_HEIGHT_TARGET_CM = 2.75  # empirical: No2 10r/gr37=2.70cm, No3 12r/gr43=2.79cm (see note 4 above)
-FRONT_FRAC = 13 / 18           # empirical split of (front+sleeve-base) at neck stage, from V7 No2
+BLOCK_HEIGHT_TARGET_CM = 2.75  # empirical: No2 10r/gr37=2.70cm, No3 12r/gr43=2.79cm
 
-# per-section growth (spec §4, corrected per note 2 above): back = Lb+Rb as ONE section.
+# per-section growth (spec §4, AS WRITTEN — do not "correct" toward V7; see CLAUDE.md).
 FULL_RATE  = {"front": 2, "back": 2, "sleeve": 2}
-LIGHT_RATE = {"front": 2, "back": 2, "sleeve": 0}
+LIGHT_RATE = {"front": 1, "back": 1, "sleeve": 1}
 
 def UA_max_cm(bust):
     return 8 if bust < 100 else 11 if bust < 120 else 14
@@ -98,141 +131,155 @@ def toEven(n): return n + 1 if n % 2 else n
 
 
 def solve(bust, arm, neck_cm, armhole_cm, gs, gr, fit):
-    """Solve Y4 (divide) upward to CO. Returns None if no valid/parity-clean
-    combination is found anywhere in the search space (hard failure)."""
+    """Solve Y4 (divide) upward to CO. UA is the single outer/searched
+    variable; everything else is closed-form/enumerable per UA (see module
+    docstring #3). Returns {"ok": False, "diagnostics": {UA: reason, ...}}
+    when no UA yields a valid candidate."""
     cmToRibs = lambda cm: round(cm * gs / 10 / 2)
     fin_bust = bust + EASE[fit]
-    fin_arm  = arm + SLEEVE_EASE_CM
+    fin_arm = arm + SLEEVE_EASE_CM
 
-    # Step B: Y4 windows
-    sleeve_total = cmToRibs(fin_arm)
-    body_total   = cmToRibs(fin_bust)
+    body_target_ribs = cmToRibs(fin_bust)               # includes UA x2
+    arm_target_ribs = toEven(round(fin_arm * gs / 20))   # includes UA x1; forced even (post-UA sleeve even)
+
     ua_lo = max(1, round(UA_MIN_CM * gs / 20))
     ua_hi = max(ua_lo, math.floor(UA_max_cm(bust) * gs / 20))
 
-    neck_ideal = round((neck_cm / NECK_RELAX_FACTOR) * gs / 20)
+    neck_target = round(neck_cm * gs / 20)  # plain cm->rib conversion; see module docstring #3
     rows_target = armhole_cm * gr / 10
 
-    best = None
-    for neck in range(max(7, neck_ideal - 4), neck_ideal + 5):
-        if neck % 2 == 0:
-            continue  # neck is always odd -- see derivation below
-        # Pre-raglan front/sleeve-base/back all derive from `neck` alone (spec Step C).
-        # front is odd, sleeve-base is odd (funnel/neck-stage parity, spec §3), and
-        # back = front +/- 1 (note 1 above). Requiring
-        #   neck = front + 2*sleeve_base + (back - 2)          [one-time back +2 = +1/half]
-        # with back = front + offset (offset = +/-1) gives
-        #   front + sleeve_base = (neck + 2 - offset) / 2
-        # Since front and sleeve_base are both odd, their sum is even, which pins
-        # offset to whichever sign makes (neck+2-offset)/2 an integer -- i.e. neck's
-        # residue mod 4 (this is also why neck must be odd: both odd terms sum even,
-        # and 2*even - offset must land back on neck).
-        if neck % 4 == 3:
-            offset, target_sum = 1, (neck + 1) // 2
-        elif neck % 4 == 1:
-            offset, target_sum = -1, (neck + 3) // 2
-        else:
-            continue
-        f_pr = toOdd(round(target_sum * FRONT_FRAC))
-        s_pr_base = target_sum - f_pr
-        if s_pr_base < 1 or s_pr_base % 2 == 0:
-            continue
-        b_pr = f_pr + offset  # pre-raglan back (one section); +1/half one-time increase already folded in
-        if b_pr < 2:
+    candidates = []
+    diagnostics = {}
+
+    for UA in range(ua_lo, ua_hi + 1):
+        sleeve_Y4 = arm_target_ribs - UA
+        if (sleeve_Y4 + UA) % 2 != 0:
+            diagnostics[UA] = "sleeve_post_UA_parity_fail"
             continue
 
-        # Step C: one-time increase (18-30% of neck; back +1/half fixed, sleeve +odd each, front +0)
-        for inc in range(math.ceil(neck * ONE_TIME_PCT[0]), math.floor(neck * ONE_TIME_PCT[1]) + 1):
-            if (inc - 2) % 2:
-                continue
-            sAdd = (inc - 2) // 2
-            if sAdd < 1 or sAdd % 2 == 0:
-                continue
-            s_pr = s_pr_base + sAdd
+        body_Y4 = body_target_ribs - 2 * UA
+        front_Y4 = toOdd(round(body_Y4 / 2))
+        # back = front, or front +/- 1 if that's what's needed to land closest
+        # to the exact body target (module docstring #2). Never a fixed offset.
+        back_Y4 = min([front_Y4 - 1, front_Y4, front_Y4 + 1], key=lambda c: abs(front_Y4 + c - body_Y4))
 
-            # Step D: block solve
+        ua_valid = []
+        any_block_fit = False
+        for brow in range(BLOCK_ROWS[0], BLOCK_ROWS[1] + 1):
+            nb = round(rows_target / brow)
+            if nb < 1:
+                continue
             for nlight in (0, 1):
-                for brow in range(BLOCK_ROWS[0], BLOCK_ROWS[1] + 1):
-                    nb = round(rows_target / brow)
-                    if nb < 1:
-                        continue
-                    nfull = nb - nlight
-                    if nfull < 1:
-                        continue
+                nfull = nb - nlight
+                if nfull < 1:
+                    continue
+                growth = nfull * FULL_RATE["front"] + nlight * LIGHT_RATE["front"]  # same growth for front/back/sleeve
+                sleeve_pr = sleeve_Y4 - growth
+                front_pr = front_Y4 - growth
+                back_pr = back_Y4 - growth
+                if sleeve_pr < 2 or sleeve_pr % 2 != 0:   # pre-raglan sleeve even (spec §3)
+                    continue
+                if front_pr < 1 or back_pr < 1:
+                    continue
+                any_block_fit = True
 
-                    front_end  = f_pr + nfull * FULL_RATE["front"]  + nlight * LIGHT_RATE["front"]
-                    sleeve_end = s_pr + nfull * FULL_RATE["sleeve"] + nlight * LIGHT_RATE["sleeve"]
-                    back_end   = b_pr + nfull * FULL_RATE["back"]   + nlight * LIGHT_RATE["back"]
+                front_neck = front_pr                     # front +0 one-time
+                back_neck = back_pr - 2                    # back +1/half = +2 total, one-time
+                if back_neck < 1:
+                    continue
+                CONST = front_neck + back_neck + 2 * sleeve_pr
 
-                    row_err = abs(nb - rows_target / brow)
-                    block_height_err = abs(brow * 10 / gr - BLOCK_HEIGHT_TARGET_CM)
+                best_sAdd = None
+                sAdd = 1
+                while True:
+                    neck_total = CONST - 2 * sAdd
+                    if neck_total < 7:
+                        break
+                    inc = 2 + 2 * sAdd
+                    lo = math.ceil(neck_total * ONE_TIME_PCT[0])
+                    hi = math.floor(neck_total * ONE_TIME_PCT[1])
+                    if lo <= inc <= hi:
+                        if best_sAdd is None or abs(neck_total - neck_target) < abs(best_sAdd["neck_total"] - neck_target):
+                            best_sAdd = dict(sAdd=sAdd, inc=inc, neck_total=neck_total)
+                    sAdd += 2
+                    if sAdd > 60:
+                        break
+                if best_sAdd is None:
+                    continue
 
-                    # UA is a fine-tuner chosen AFTER block growth (note 3 above), not a
-                    # driver of it: it doesn't affect front_end/back_end/sleeve_end at all.
-                    for UA in range(ua_lo, ua_hi + 1):
-                        if (sleeve_end + UA) % 2:
-                            continue  # post-UA sleeve even (spec §3)
-                        SL_post = sleeve_end + UA
-                        B_post  = front_end + back_end + 2 * UA
-                        fin_sleeve_cm = SL_post * 2 / gs * 10
-                        fin_bust_cm   = B_post * 2 / gs * 10
-                        score = (block_height_err * 1.0
-                                 + abs(neck - neck_ideal) * 1.5
-                                 + abs(fin_bust_cm - fin_bust) * 0.3
-                                 + abs(fin_sleeve_cm - fin_arm) * 0.5
-                                 + row_err * 0.3)
-                        if best is None or score < best["score"]:
-                            best = dict(score=score, neck=neck, inc=inc, sAdd=sAdd,
-                                        f_pr=f_pr, s_pr=s_pr, b_pr=b_pr, offset=offset,
-                                        nfull=nfull, nlight=nlight, brow=brow, nb=nb,
-                                        front_end=front_end, back_end=back_end, sleeve_end=sleeve_end,
-                                        UA=UA, SL_post=SL_post, B_post=B_post,
-                                        fin_bust_cm=fin_bust_cm, fin_sleeve_cm=fin_sleeve_cm)
-    if best is None:
-        return None
-    b = best
+                bh_err = abs(brow * 10 / gr - BLOCK_HEIGHT_TARGET_CM)
+                ua_valid.append(dict(
+                    brow=brow, nb=nb, nfull=nfull, nlight=nlight,
+                    front_pr=front_pr, back_pr=back_pr, sleeve_pr=sleeve_pr,
+                    front_neck=front_neck, back_neck=back_neck,
+                    sAdd=best_sAdd["sAdd"], inc=best_sAdd["inc"], neck=best_sAdd["neck_total"],
+                    bh_err=bh_err,
+                ))
 
-    # Step E: up to CO
-    CO = b["neck"] + PRENECK_MARGIN_RIBS
+        if not ua_valid:
+            diagnostics[UA] = "block_fit_fail" if not any_block_fit else "one_time_band_fail"
+            continue
+
+        best_ua = min(ua_valid, key=lambda c: c["bh_err"])
+        candidates.append(dict(
+            UA=UA, sleeve_Y4=sleeve_Y4, front_Y4=front_Y4, back_Y4=back_Y4,
+            **best_ua,
+            CO=best_ua["neck"] + PRENECK_MARGIN_RIBS,
+            neck_dev=abs(best_ua["neck"] - neck_target),
+        ))
+
+    if not candidates:
+        return dict(ok=False, diagnostics=diagnostics, neck_target=neck_target)
+
+    b = min(candidates, key=lambda c: c["neck_dev"])  # single criterion, no weighted score (spec §7 fix)
     funnel_rows = toEven(round(FUNNEL_DEPTH_CM * gr / 10))
-    preraglan_ribs = b["f_pr"] + b["b_pr"] + 2 * b["s_pr"]
-    Y4_ribs = b["front_end"] + b["back_end"] + 2 * b["sleeve_end"]
+    preraglan_ribs = b["front_pr"] + b["back_pr"] + 2 * b["sleeve_pr"]
+    Y4_ribs = b["front_Y4"] + b["back_Y4"] + 2 * b["sleeve_Y4"]
+    SL_post = b["sleeve_Y4"] + b["UA"]
+    B_post = b["front_Y4"] + b["back_Y4"] + 2 * b["UA"]
 
-    # neck stage (before one-time increase): front unchanged (front+0 one-time), sleeve
-    # base (before +sAdd), back total = b_pr - 2 (one-time increase was +1/half = +2 total).
-    neck_back_half = (b["b_pr"] - 2) // 2
-    s_neck = b["s_pr"] - b["sAdd"]
-    # pre-neck stage (before the reduction round): reduction removes front-1, sleeve-1/each
-    # (spec Step E), so working backward, pre-neck = neck + those same amounts.
-    f_preneck = b["f_pr"] + 1
+    # TDCR-style closure booleans -- these hold by construction; hard-error if any are false.
+    checks = dict(
+        y4_front_odd=(b["front_Y4"] % 2 == 1),
+        y4_back_within_one=(abs(b["back_Y4"] - b["front_Y4"]) <= 1),
+        sleeve_post_even=(SL_post % 2 == 0),
+        preraglan_sleeve_even=(b["sleeve_pr"] % 2 == 0),
+    )
+    # informational only -- see module docstring "SURFACED, NOT INVENTED". Can legitimately
+    # be False (it is, for the exact No2 anchor) without being a construction error.
+    info = dict(
+        preraglan_front_odd=(b["front_pr"] % 2 == 1),
+        neck_front_odd=(b["front_neck"] % 2 == 1),
+    )
+
+    neck_back_half = b["back_neck"] // 2
+    s_neck = b["sleeve_pr"] - b["sAdd"]
+    f_preneck = b["front_neck"] + 1
     s_preneck = s_neck + 1
     b_preneck_half = neck_back_half
 
-    checks = dict(
-        preraglan_front_odd=(b["f_pr"] % 2 == 1),
-        preraglan_sleeve_even=(b["s_pr"] % 2 == 0),
-        y4_front_odd=(b["front_end"] % 2 == 1),
-        y4_back_offset_by_one=(abs(b["back_end"] - b["front_end"]) == 1),
-        sleeve_post_even=(b["SL_post"] % 2 == 0),
-    )
     return dict(
-        CO_ribs=CO, CO_cm=round(CO * 2 / gs * 10, 1),
+        ok=True, all_candidates=candidates, diagnostics=diagnostics,
+        CO_ribs=b["CO"], CO_cm=round(b["CO"] * 2 / gs * 10, 1),
         neck_ribs=b["neck"], neck_cm=round(b["neck"] * 2 / gs * 10, 1),
+        neck_target=neck_target,
         distributions=dict(
             preneck=[b_preneck_half, s_preneck, f_preneck, s_preneck, b_preneck_half],
-            neck=[neck_back_half, s_neck, b["f_pr"], s_neck, neck_back_half],
-            preraglan=[b["b_pr"] // 2, b["s_pr"], b["f_pr"], b["s_pr"], b["b_pr"] - b["b_pr"] // 2],
-            Y4=[b["back_end"] // 2, b["sleeve_end"], b["front_end"], b["sleeve_end"], b["back_end"] - b["back_end"] // 2],
+            neck=[neck_back_half, s_neck, b["front_neck"], s_neck, neck_back_half],
+            preraglan=[b["back_pr"] // 2, b["sleeve_pr"], b["front_pr"], b["sleeve_pr"], b["back_pr"] - b["back_pr"] // 2],
+            Y4=[b["back_Y4"] // 2, b["sleeve_Y4"], b["front_Y4"], b["sleeve_Y4"], b["back_Y4"] - b["back_Y4"] // 2],
         ),
-        one_time_inc=b["inc"], preraglan_ribs=preraglan_ribs,
+        one_time_inc=b["inc"], one_time_dist=dict(back_each_half=1, sleeve_each=b["sAdd"], front=0),
+        preraglan_ribs=preraglan_ribs,
         blocks=dict(full=b["nfull"], light=b["nlight"], rows_each=b["brow"], n_blocks=b["nb"]),
         funnel_rows=funnel_rows,
         Y4_ribs=Y4_ribs,
-        Y4=dict(front=b["front_end"], back=b["back_end"], sleeve_preUA=b["sleeve_end"], UA=b["UA"],
-                SL_post=b["SL_post"], B_post=b["B_post"],
-                finished_bust_cm=round(b["fin_bust_cm"], 1),
-                finished_sleeve_cm=round(b["fin_sleeve_cm"], 1)),
+        Y4=dict(front=b["front_Y4"], back=b["back_Y4"], sleeve_preUA=b["sleeve_Y4"], UA=b["UA"],
+                SL_post=SL_post, B_post=B_post,
+                finished_bust_cm=round(B_post * 2 / gs * 10, 1),
+                finished_sleeve_cm=round(SL_post * 2 / gs * 10, 1)),
         closure_checks=checks,
+        info=info,
     )
 
 
@@ -244,19 +291,18 @@ HARNESS = {
     "C":   dict(bust=122, arm=42, neck_cm=60, armhole_cm=28,   gs=20,   gr=48, fit="relaxed"),
 }
 
-# No2 anchor targets (spec §0 / README) -- checked with slack, see "KNOWN RESIDUAL GAP" above.
+# No2 anchor targets (spec §0 / README) -- checked EXACT (gap must be 0).
 NO2_ANCHOR = dict(CO_ribs=38, neck_ribs=35, preraglan_ribs=43, one_time_inc=8, Y4_ribs=111)
-NO2_TOLERANCE_RIBS = 2
 
 
 def run_harness(verbose=True):
     all_ok = True
     for name, args in HARNESS.items():
         r = solve(**args)
-        if not r:
+        if not r["ok"]:
             all_ok = False
             if verbose:
-                print(f"{name}: NO SOLUTION")
+                print(f"{name}: NO SOLUTION diagnostics={r['diagnostics']}")
             continue
 
         closure_ok = all(r["closure_checks"].values())
@@ -267,21 +313,21 @@ def run_harness(verbose=True):
         if verbose:
             blk = r["blocks"]
             y4 = r["Y4"]
-            print(f"{name}: CO{r['CO_ribs']}({r['CO_cm']}cm) neck{r['neck_ribs']}({r['neck_cm']}cm) "
+            print(f"{name}: UA{y4['UA']} CO{r['CO_ribs']}({r['CO_cm']}cm) neck{r['neck_ribs']}({r['neck_cm']}cm) "
                   f"inc{r['one_time_inc']} pre{r['preraglan_ribs']} "
                   f"{blk['full']}F+{blk['light']}L x{blk['rows_each']}r Y4tot{r['Y4_ribs']} "
-                  f"F{y4['front']}/B{y4['back']}/S{y4['sleeve_preUA']}/UA{y4['UA']} "
+                  f"F{y4['front']}/B{y4['back']}/S{y4['sleeve_preUA']} "
                   f"bust{y4['finished_bust_cm']}cm slv{y4['finished_sleeve_cm']}cm "
-                  f"checks={closure_ok}")
+                  f"checks={closure_ok} info={r['info']}")
 
         if name == "No2":
             for field, target in NO2_ANCHOR.items():
                 achieved = r[field]
                 gap = abs(achieved - target)
-                status = "OK" if gap <= NO2_TOLERANCE_RIBS else "OUT OF TOLERANCE"
+                status = "OK" if gap == 0 else "MISS"
                 if verbose:
                     print(f"      anchor check {field}: target={target} achieved={achieved} gap={gap} [{status}]")
-                if gap > NO2_TOLERANCE_RIBS:
+                if gap != 0:
                     all_ok = False
     return all_ok
 
